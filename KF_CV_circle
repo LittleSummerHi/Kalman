@@ -1,0 +1,128 @@
+%kalman filter目标跟踪
+%产生目标航迹
+%设定初值
+function [dxV,dzV,dxpreV]=KF_CV_circle
+
+N=600;%连续计算N各时刻
+N1=200;
+n=3; %状态维度
+I=eye(6);
+
+w=0.5;
+v=100;
+T=0.1;% 估计采样间隔 T
+k=0;
+s0=[300,v,400,w,1500,0]';     % 初始状态 % 匀速直线运动速度 
+x=[500,30,800,40,2000,10]'; %估计初始状态
+P=10000*I;%初始方差P0
+%Sigma_u=[10,15,25];
+%for m=1:3
+sigma_u=1;           % 策动噪声标准差
+%sigma_u=Sigma_u(m);
+sigma_r=5;sigma_alpha=0.06 ;sigma_beta=0.08;       % 观测噪声方差
+vsigma=randn(N,3); %零均值，标准差为1的观测噪声
+
+
+Q=eye(3)*sigma_u^2;     %%%状态噪声
+Rpol=blkdiag(sigma_r^2,sigma_alpha^2,sigma_beta^2);  %%%观测噪声矩阵
+
+Gu=[T^2/2;T];
+G=blkdiag(Gu,Gu,Gu); %策动矩阵G
+Fu=[1,T;0,1];
+F=blkdiag(Fu,Fu,Fu);  %状态转移矩阵F
+Hu=[1 0];
+H=blkdiag(Hu,Hu,Hu);%观测过程矩阵H
+
+%目标航迹
+f=@(k)[s0(1)+v/w*cos(w*k*T),v,s0(3)+v/w*sin(w*k*T),w,s0(5),0]';  
+%观测方程
+%直角坐标转换为极坐标    
+h=@(x)[sqrt(x(1)^2+x(3)^2+x(5)^2);atand(x(3)/x(1));asind(x(5)/sqrt(x(1)^2+x(3)^2+x(5)^2))]; 
+%极坐标转化为直角坐标
+Trans=@(z)[z(1)*cosd(z(3))*cosd(z(2));z(1)*cosd(z(3))*sind(z(2));z(1)*sind(z(3))];
+
+
+%保存结果
+xV = zeros(6,N);  %滤波结果        
+sV = zeros(n,N);  % %极坐标下的实际结果
+zV = zeros(n,N);%测量值
+pV =zeros(6,N);%预测值
+SV =zeros(6,N);
+XV = zeros(n,N);%转化为极坐标的滤波结果
+ZV = zeros(n,N);%转化为直角坐标的测量值
+PV =zeros(n,N);%极坐标预测值
+dzV=zeros(n,N);%观测值方差
+dxV=zeros(n,N);%滤波值方差
+dxpreV=zeros(n,N);%预测值方差
+%滤波过程
+
+s=s0;
+    
+    for k=1:N
+
+       %if k==N1;
+        %s=[s(1),3000,s(3),4000,s(5),5000]';
+        %P=10000*I;
+       
+     % end 
+     %%%%%%%%%%%%% 
+     %R由极坐标系转化为直角坐标系
+    Rlen=sqrt(x(1)^2+x(3)^2+x(5)^2);
+    alpha=atand(x(3)/x(1));
+    beta=asind(x(5)/sqrt(x(1)^2+x(3)^2+x(5)^2));
+    Rcar = cal_R(Rlen,alpha,beta,sigma_r,sigma_alpha,sigma_beta);
+    %sigma_x=(cos(beta))^2*(cos(alpha))^2*sigma_r^2+Rlen^2*(sin(beta))^2*(cos(alpha))^2*sigma_beta^2+Rlen^2*(cos(beta))^2*(sin(alpha))^2*sigma_alpha^2;
+    %sigma_y=(cos(beta))^2*(sin(alpha))^2*sigma_r^2+Rlen^2*(sin(beta))^2*(sin(alpha))^2*sigma_beta^2+Rlen^2*(cos(beta))^2*(cos(alpha))^2*sigma_alpha^2;
+    %sigma_z=(sin(beta))^2*sigma_r^2+Rlen^2*(cos(beta))^2*sigma_beta^2;
+    %sigma_xy=(cos(beta))^2*cos(alpha)*sin(alpha)*sigma_r^2+Rlen^2*(sin(beta))^2*cos(alpha)*sin(alpha)*sigma_beta^2-Rlen^2*(cos(beta))^2*cos(alpha)*sin(alpha)*sigma_beta^2;
+    %sigma_xz=cos(beta)*cos(alpha)*sin(beta)*sigma_r^2-Rlen^2*sin(beta)*cos(alpha)*cos(beta)*sigma_beta^2;
+    %sigma_yz=cos(beta)*sin(alpha)*sin(beta)*sigma_r^2-Rlen^2*sin(beta)*sin(alpha)*cos(beta)*sigma_beta^2;
+    % Rcar=[sigma_x,sigma_xy,sigma_xz;sigma_xy,sigma_y,sigma_yz;sigma_xz,sigma_yz,sigma_z];
+     %%%%%% 
+
+      x_=x;
+
+      S=h(s);
+      z = h(s) + Rpol*vsigma(k,:)';   %极坐标下状态测量值    
+      xpre=F*x_+G*Q*vsigma(k,:)';%状态预测结果
+      Pre=h(xpre);PV(:,k)=Pre;%极坐标下的预测值
+      pV(:,k)=xpre;
+      sV(:,k)=h(s);  %极坐标下真实值
+      zV(:,k) =z; %状态测量值
+      Z=Trans(z);ZV(:,k)=Z;%转化为直角坐标系的测量值
+
+      P_=F*P*F'+G*Q*G';         %预测过程方差
+      K=P_*H'*inv(H*P_*H'+Rcar); %卡尔曼增益
+      P=(I-K*H)*P_*(I-K*H)'+K*Rcar*K'; %滤波方差
+      x=xpre+K*(Z-H*xpre);        %状态估计值
+      %v=[(x(1)-x_(1))/T,(x(3)-x_(3))/T,(x(5)-x_(5))/T]';
+      %x=[x(1),(x(1)-x_(1))/T,x(3),(x(3)-x_(3))/T,x(5),(x(5)-x_(5))/T]';
+      xV(:,k) = x;          %save
+      X=h(x);XV(:,k)=X;
+      s=f(k);
+      SV(:,k)=s;
+      
+
+       dxV(:,k)=X-S;
+       dxpreV(:,k)=Pre-S;
+       dzV(:,k)=z-S;
+    end
+
+
+ % for i=1:3
+ %   figure(i)
+ 
+  %  plot(dzV(1,:),'-b.');hold on;
+  % plot(dxpreV(1,:),'-g');hold on;
+  %  plot(dxV(1,:),'-r' );hold on;
+ %   figure(2)
+ %   plot(zV(1,:),'-b.');hold on;
+  %  plot(PV(1,:),'-g');hold on;
+  %  plot(XV(1,:),'-r' );hold on;
+    %plot(sV(i,:),'-k.');hold on;
+    %legend('预测Cx=5','滤波Cx=5');
+ % end
+    %plot(dzV(1,:),'-b.');hold on;
+
+
+%legend('预测Cx=15','滤波Cx=15','预测Cx=30','滤波Cx=30','预测Cx=45','滤波Cx=45','观测');
